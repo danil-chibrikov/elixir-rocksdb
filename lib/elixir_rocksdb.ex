@@ -466,7 +466,7 @@ defmodule ElixirRocksdb do
     process_batch(db, batch)
   end
 
-  def stream_delete_all(db, cf_ref, prefix) do
+  def stream_delete_cf_all(db, cf_ref, prefix) do
     batch =
       Stream.resource(
         iterate_start_by_prefix_cf(db, cf_ref, prefix, :delete),
