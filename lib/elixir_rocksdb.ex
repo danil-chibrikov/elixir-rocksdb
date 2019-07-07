@@ -620,7 +620,7 @@ defmodule ElixirRocksdb do
   @doc """
     Delete a key/value pair by key from the specified column family.
   """
-  def delete(db, k, cf_ref), do: :rocksdb.delete(db, cf_ref, k, [])
+  def delete(db, cf_ref, k), do: :rocksdb.delete(db, cf_ref, k, [])
 
   @doc """
     Get count all records from the default column family.
@@ -636,36 +636,4 @@ defmodule ElixirRocksdb do
     Close Rocksdb database.
   """
   def close(db), do: :rocksdb.close(db)
-
-  @doc """
-    Create item to hex for further sorting capability from Rocksdb.
-  """
-  def to_hex(item) when is_integer(item) do
-    <<y1::4, y2::4, y3::4, y4::4, y5::4, y6::4, y7::4, y8::4, y9::4, y10::4, y11::4, y12::4,
-      y13::4, y14::4, y15::4, y16::4>> = <<item::size(64)>>
-
-    <<byte_to_hex(y1)::binary(), byte_to_hex(y2)::binary(), byte_to_hex(y3)::binary(),
-      byte_to_hex(y4)::binary(), byte_to_hex(y5)::binary(), byte_to_hex(y6)::binary(),
-      byte_to_hex(y7)::binary(), byte_to_hex(y8)::binary(), byte_to_hex(y9)::binary(),
-      byte_to_hex(y10)::binary(), byte_to_hex(y11)::binary(), byte_to_hex(y12)::binary(),
-      byte_to_hex(y13)::binary(), byte_to_hex(y14)::binary(), byte_to_hex(y15)::binary(),
-      byte_to_hex(y16)::binary()>>
-  end
-
-  defp byte_to_hex(0), do: "0"
-  defp byte_to_hex(1), do: "1"
-  defp byte_to_hex(2), do: "2"
-  defp byte_to_hex(3), do: "3"
-  defp byte_to_hex(4), do: "4"
-  defp byte_to_hex(5), do: "5"
-  defp byte_to_hex(6), do: "6"
-  defp byte_to_hex(7), do: "7"
-  defp byte_to_hex(8), do: "8"
-  defp byte_to_hex(9), do: "9"
-  defp byte_to_hex(10), do: "A"
-  defp byte_to_hex(11), do: "B"
-  defp byte_to_hex(12), do: "C"
-  defp byte_to_hex(13), do: "D"
-  defp byte_to_hex(14), do: "E"
-  defp byte_to_hex(15), do: "F"
 end
