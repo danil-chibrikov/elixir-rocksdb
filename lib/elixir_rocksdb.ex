@@ -12,6 +12,16 @@ defmodule ElixirRocksdb do
   def open(path, opts, cf_desc), do: :rocksdb.open(to_charlist(path), opts, cf_desc)
 
   @doc """
+    Open Rocksdb with column families.
+  """
+  def open_with_cf(path, opts, cf_list) do
+    cf_descs = create_cf_descs(cf_list)
+    :rocksdb.open_with_cf(to_charlist(path), opts, cf_descs)
+  end
+
+  defp create_cf_descs(list), do: Enum.map(list, fn {cf, opts} -> {to_charlist(cf), opts} end)
+
+  @doc """
   Create a new column family.
   """
   def create_cf(db_ref, name, opts),
@@ -21,7 +31,7 @@ defmodule ElixirRocksdb do
     List column families.
   """
   def list_cf(db_name, opts \\ []) do
-    :rocksdb.list_column_families(db_name, opts)
+    :rocksdb.list_column_families(to_charlist(db_name), opts)
   end
 
   @doc """
