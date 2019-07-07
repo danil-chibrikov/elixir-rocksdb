@@ -19,7 +19,12 @@ defmodule ElixirRocksdb do
     :rocksdb.open_with_cf(to_charlist(path), opts, cf_descs)
   end
 
-  defp create_cf_descs(list), do: Enum.map(list, fn {cf, opts} -> {to_charlist(cf), opts} end)
+  defp create_cf_descs(list) do
+    [
+      {"default", []}
+      | Enum.map(list, fn {cf, opts} -> {to_charlist(cf), opts} end)
+    ]
+  end
 
   @doc """
   Create a new column family.
