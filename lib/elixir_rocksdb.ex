@@ -39,16 +39,8 @@ defmodule ElixirRocksdb do
     Get only value. Value is term.
   """
   def get(db, k) do
-    case :rocksdb.get(db, k, []) do
-      {:ok, <<131, _::binary>> = value} ->
-        :erlang.binary_to_term(value)
-
-      :not_found ->
-        nil
-
-      {:error, _reason} = val ->
-        process(val)
-    end
+    :rocksdb.get(db, k, [])
+    |> get_condition
   end
 
   @doc """
@@ -56,17 +48,15 @@ defmodule ElixirRocksdb do
     Get only value. Value is term.
   """
   def get(db, cf_ref, k) do
-    case :rocksdb.get(db, cf_ref, k, []) do
-      {:ok, <<131, _::binary>> = value} ->
-        :erlang.binary_to_term(value)
-
-      :not_found ->
-        nil
-
-      {:error, _reason} = val ->
-        process(val)
-    end
+    :rocksdb.get(db, cf_ref, k, [])
+    |> get_condition
   end
+
+  # Get helpers
+
+  defp get_condition({:ok, <<131, _::binary>> = value}), do: :erlang.binary_to_term(value)
+  defp get_condition(:not_found), do: nil
+  defp get_condition({:error, _reason} = val), do: process(val)
 
   @doc """
     Put a key/value pair into the default column family.
@@ -111,7 +101,7 @@ defmodule ElixirRocksdb do
     Put a key/value pair batch into the default column family.
     Key and value only binary.
   """
-  def put_batch(db, [_ | _] = pairs, cf_ref \\ nil) do
+  def put_batch(db, pairs, cf_ref \\ nil) do
     case pairs do
       [] ->
         :ok
@@ -134,7 +124,7 @@ defmodule ElixirRocksdb do
     Delete a key batch into the default column family.
     Key only binary.
   """
-  def del_batch(db, [_ | _] = pairs, cf_ref \\ nil) do
+  def del_batch(db, pairs, cf_ref \\ nil) do
     case pairs do
       [] ->
         :ok
@@ -153,7 +143,7 @@ defmodule ElixirRocksdb do
     Put/delete a (key/value)/key batch into the default column family.
     Key and value only binary.
   """
-  def batch(db, [_ | _] = pairs, cf_ref \\ nil) do
+  def batch(db, pairs, cf_ref \\ nil) do
     case pairs do
       [] ->
         :ok
@@ -626,6 +616,11 @@ defmodule ElixirRocksdb do
     Delete a key/value pair by key from the default column family.
   """
   def delete(db, k), do: :rocksdb.delete(db, k, [])
+
+  @doc """
+    Delete a key/value pair by key from the specified column family.
+  """
+  def delete(db, k, cf_ref), do: :rocksdb.delete(db, cf_ref, k, [])
 
   @doc """
     Get count all records from the default column family.
