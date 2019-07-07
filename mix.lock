@@ -1,0 +1,3 @@
+%{
+  "rocksdb": {:hex, :rocksdb, "1.2.0", "5679e2289e4be1e0f53021d898e974b31f2cf0b3a3cec83529b7766d45f90faf", [:rebar3], [], "hexpm"},
+}
