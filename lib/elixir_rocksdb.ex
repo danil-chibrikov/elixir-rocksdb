@@ -21,7 +21,7 @@ defmodule ElixirRocksdb do
 
   defp create_cf_descs(list) do
     [
-      {"default", []}
+      {'default', []}
       | Enum.map(list, fn {cf, opts} -> {to_charlist(cf), opts} end)
     ]
   end
