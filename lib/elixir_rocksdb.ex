@@ -28,13 +28,30 @@ defmodule ElixirRocksdb do
     Retrieve a key/value pair in the default column family.
     Get only value. Value is term.
   """
-  def get(db, k, default \\ nil) do
+  def get(db, k) do
     case :rocksdb.get(db, k, []) do
       {:ok, <<131, _::binary>> = value} ->
         :erlang.binary_to_term(value)
 
       :not_found ->
-        default
+        nil
+
+      {:error, _reason} = val ->
+        process(val)
+    end
+  end
+
+  @doc """
+    Retrieve a key/value pair in the specified column family.
+    Get only value. Value is term.
+  """
+  def get(db, cf_ref, k) do
+    case :rocksdb.get(db, cf_ref, k, []) do
+      {:ok, <<131, _::binary>> = value} ->
+        :erlang.binary_to_term(value)
+
+      :not_found ->
+        nil
 
       {:error, _reason} = val ->
         process(val)
@@ -57,7 +74,7 @@ defmodule ElixirRocksdb do
   end
 
   @doc """
-    Put a key/value pair into the default column family.
+    Put a key/value pair into the specified column family.
     Key and value only binary.
   """
   def put(db, cf_ref, k, v) do
@@ -84,67 +101,67 @@ defmodule ElixirRocksdb do
     Put a key/value pair batch into the default column family.
     Key and value only binary.
   """
-  def put_batch(db, [_ | _] = pairs) do
-    items =
-      pairs
-      |> Enum.map(fn
-        {k, v} ->
-          check_record({:put, k, v})
+  def put_batch(db, [_ | _] = pairs, cf_ref \\ nil) do
+    case pairs do
+      [] ->
+        :ok
 
-        _ ->
-          nil
-      end)
+      [_ | _] ->
+        items =
+          Enum.map(pairs, fn
+            {k, v} ->
+              check_record({:put, k, v})
 
-    process_batch(db, items)
+            _ ->
+              nil
+          end)
+
+        check_batch_type(db, cf_ref, items)
+    end
   end
-
-  def put_batch(_, []), do: :ok
 
   @doc """
     Delete a key batch into the default column family.
     Key only binary.
   """
-  def del_batch(db, [_ | _] = pairs) do
-    items =
-      pairs
-      |> Enum.map(fn k ->
-        check_record({:del, k})
-      end)
+  def del_batch(db, [_ | _] = pairs, cf_ref \\ nil) do
+    case pairs do
+      [] ->
+        :ok
 
-    process_batch(db, items)
+      [_ | _] ->
+        items =
+          Enum.map(pairs, fn k ->
+            check_record({:del, k})
+          end)
+
+        check_batch_type(db, cf_ref, items)
+    end
   end
-
-  def del_batch(_, []), do: :ok
 
   @doc """
     Put/delete a (key/value)/key batch into the default column family.
     Key and value only binary.
   """
-  def batch(db, [_ | _] = pairs) do
-    items =
-      pairs
-      |> Enum.map(fn elem ->
-        check_record(elem)
-      end)
+  def batch(db, [_ | _] = pairs, cf_ref \\ nil) do
+    case pairs do
+      [] ->
+        :ok
 
-    process_batch(db, items)
+      [_ | _] ->
+        items =
+          Enum.map(pairs, fn elem ->
+            check_record(elem)
+          end)
+
+        check_batch_type(db, cf_ref, items)
+    end
   end
-
-  def batch(_, []), do: :ok
-
-  def batch(db, cf_ref, [_ | _] = pairs) do
-    items =
-      pairs
-      |> Enum.map(fn elem ->
-        check_record(elem)
-      end)
-
-    process_batch_cf(db, cf_ref, items)
-  end
-
-  def batch(_, _, []), do: :ok
 
   # Batch helpers
+
+  defp check_batch_type(db, nil, items), do: process_batch(db, items)
+  defp check_batch_type(db, cf_ref, items), do: process_batch_cf(db, cf_ref, items)
 
   defp check_record(k, v) do
     case normalize_key_value(k, v) do
@@ -250,7 +267,8 @@ defmodule ElixirRocksdb do
   end
 
   @doc """
-    Return a iterator over the contents of the database from column family.
+    Return a iterator over the contents of the database
+      from specified column family.
   """
   def iterator(db, cf_ref, opts) do
     case :rocksdb.iterator(db, cf_ref, opts) do
