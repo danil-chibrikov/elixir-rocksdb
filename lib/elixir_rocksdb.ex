@@ -40,6 +40,11 @@ defmodule ElixirRocksdb do
   end
 
   @doc """
+    Is the database empty.
+  """
+  def is_empty?(db), do: :rocksdb.is_empty(db)
+
+  @doc """
     Retrieve a key/value pair in the default column family.
     Get only value. Value is term.
   """
@@ -620,12 +625,16 @@ defmodule ElixirRocksdb do
   @doc """
     Delete a key/value pair by key from the default column family.
   """
-  def delete(db, k), do: :rocksdb.delete(db, k, [])
+  def delete(db, k, opts), do: :rocksdb.delete(db, k, opts)
 
   @doc """
     Delete a key/value pair by key from the specified column family.
   """
-  def delete(db, cf_ref, k), do: :rocksdb.delete(db, cf_ref, k, [])
+  def delete(db, cf_ref, k, opts), do: :rocksdb.delete(db, cf_ref, k, opts)
+
+  def single_delete(db, k, opts), do: :rocksdb.single_delete(db, k, opts)
+
+  def single_delete(db, cf_ref, k, opts), do: :rocksdb.single_delete(db, cf_ref, k, opts)
 
   @doc """
     Get count all records from the default column family.
