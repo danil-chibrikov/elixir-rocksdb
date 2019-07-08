@@ -16,7 +16,8 @@ defmodule ElixirRocksdb do
   """
   def open_with_cf(path, opts, cf_list) do
     cf_descs = create_cf_descs(cf_list)
-    :rocksdb.open_with_cf(to_charlist(path), opts, cf_descs)
+    {:ok, db, cf_ref_list} = :rocksdb.open_with_cf(to_charlist(path), opts, cf_descs)
+    {:ok, db, zip_cf_ref(cf_list, cf_ref_list)}
   end
 
   defp create_cf_descs(list) do
@@ -24,6 +25,12 @@ defmodule ElixirRocksdb do
       {'default', []}
       | Enum.map(list, fn {cf, opts} -> {to_charlist(cf), opts} end)
     ]
+  end
+
+  defp zip_cf_ref(cf_list, cf_ref_list) do
+    [{"default", []} | cf_list]
+    |> Enum.map(fn {name, []} -> name end)
+    |> Enum.zip(cf_ref_list)
   end
 
   @doc """
