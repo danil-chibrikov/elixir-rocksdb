@@ -73,8 +73,8 @@ defmodule ElixirRocksdb do
 
   # Get helpers
 
-  defp get_condition({:ok, <<131, _::binary>> = value}), do: {:ok, :erlang.binary_to_term(value)}
-  defp get_condition(:not_found), do: {:ok, nil}
+  defp get_condition({:ok, <<131, _::binary>> = value}), do: :erlang.binary_to_term(value)
+  defp get_condition(:not_found), do: nil
   defp get_condition({:error, _reason} = val), do: process(val)
 
   @doc """
