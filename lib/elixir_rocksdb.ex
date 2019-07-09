@@ -52,6 +52,11 @@ defmodule ElixirRocksdb do
   """
   def is_empty?(db), do: :rocksdb.is_empty(db)
 
+  def get({db, cf}, k) do
+    :rocksdb.get(db, cf, k, [])
+    |> get_condition
+  end
+
   @doc """
     Retrieve a key/value pair in the default column family.
     Get only value. Value is term.
@@ -72,14 +77,26 @@ defmodule ElixirRocksdb do
 
   # Get helpers
 
-  defp get_condition({:ok, <<131, _::binary>> = value}), do: :erlang.binary_to_term(value)
-  defp get_condition(:not_found), do: nil
+  defp get_condition({:ok, <<131, _::binary>> = value}), do: {:ok, :erlang.binary_to_term(value)}
+  defp get_condition(:not_found), do: {:ok, nil}
   defp get_condition({:error, _reason} = val), do: process(val)
 
   @doc """
     Put a key/value pair into the default column family.
     Key and value only binary.
   """
+
+  def put({db, cf}, k, v) do
+    case check_record(k, v) do
+      {key, value} ->
+        :rocksdb.put(db, cf, key, value, [])
+        |> process
+
+      _ ->
+        :ok
+    end
+  end
+
   def put(db, k, v) do
     case check_record(k, v) do
       {key, value} ->
@@ -325,18 +342,6 @@ defmodule ElixirRocksdb do
   end
 
   @doc """
-    Return stream with all key/value pair, when value is term
-      from specified column family.
-  """
-  def stream_iterator_cf(db, cf_ref) do
-    Stream.resource(
-      iterate_start(db, cf_ref, :iterate),
-      &iterate_step/1,
-      &iterate_end/1
-    )
-  end
-
-  @doc """
     Delete all key/value pair from default column family.
   """
   def stream_delete_all(db) do
@@ -351,26 +356,11 @@ defmodule ElixirRocksdb do
     process_batch(db, batch)
   end
 
-  @doc """
-    Delete all key/value pair from specified column family.
-  """
-  def stream_delete_cf_all(db, cf_ref) do
-    batch =
-      Stream.resource(
-        iterate_start(db, cf_ref, :delete),
-        &iterate_step/1,
-        &iterate_end/1
-      )
-      |> Enum.to_list()
-
-    process_batch_cf(db, cf_ref, batch)
-  end
-
   # Stream iterator helpers functions
 
-  defp iterate_start(db, action) do
+  defp iterate_start({db, cf_ref}, action) do
     fn ->
-      case :rocksdb.iterator(db, []) do
+      case :rocksdb.iterator(db, cf_ref, []) do
         {:ok, iter} ->
           {:first, iter, action}
 
@@ -380,9 +370,9 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start(db, cf_ref, action) do
+  defp iterate_start(db, action) do
     fn ->
-      case :rocksdb.iterator(db, cf_ref, []) do
+      case :rocksdb.iterator(db, []) do
         {:ok, iter} ->
           {:first, iter, action}
 
@@ -434,36 +424,12 @@ defmodule ElixirRocksdb do
   end
 
   @doc """
-    Return stream with all key/value pair by prefix, when value is term
-     from specified column family.
-  """
-  def stream_iterator_cf(db, cf_ref, prefix) do
-    Stream.resource(
-      iterate_start_by_prefix_cf(db, cf_ref, prefix, :iterate),
-      &iterate_step_by_prefix/1,
-      &iterate_end_by_prefix/1
-    )
-  end
-
-  @doc """
     Return stream with all key/value pair by prefix with offset,
       when value is term from default column family.
   """
   def stream_iterator(db, prefix, offset) do
     Stream.resource(
       iterate_start_by_prefix(db, prefix, offset, :iterate),
-      &iterate_step_by_prefix/1,
-      &iterate_end_by_prefix/1
-    )
-  end
-
-  @doc """
-    Return stream with all key/value pair by prefix with offset,
-      when value is term from specified column family.
-  """
-  def stream_iterator_cf(db, cf_ref, prefix, offset) do
-    Stream.resource(
-      iterate_start_by_prefix_cf(db, cf_ref, prefix, offset, :iterate),
       &iterate_step_by_prefix/1,
       &iterate_end_by_prefix/1
     )
@@ -484,19 +450,19 @@ defmodule ElixirRocksdb do
     process_batch(db, batch)
   end
 
-  def stream_delete_cf_all(db, cf_ref, prefix) do
-    batch =
-      Stream.resource(
-        iterate_start_by_prefix_cf(db, cf_ref, prefix, :delete),
-        &iterate_step_by_prefix/1,
-        &iterate_end_by_prefix/1
-      )
-      |> Enum.reject(&is_nil/1)
-
-    process_batch_cf(db, cf_ref, batch)
-  end
-
   # Stream iterator helpers functions
+
+  defp iterate_start_by_prefix({db, cf_ref}, prefix, action) do
+    fn ->
+      case :rocksdb.iterator(db, cf_ref, prefix_same_as_start: true) do
+        {:ok, iter} ->
+          {:first, prefix, iter, action}
+
+        {:error, _reason} ->
+          :end_of_table
+      end
+    end
+  end
 
   defp iterate_start_by_prefix(db, prefix, action) do
     fn ->
@@ -510,9 +476,9 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start_by_prefix(db, prefix, offset, action) do
+  defp iterate_start_by_prefix({db, cf_ref}, prefix, offset, action) do
     fn ->
-      case :rocksdb.iterator(db, prefix_same_as_start: true) do
+      case :rocksdb.iterator(db, cf_ref, prefix_same_as_start: true) do
         {:ok, iter} ->
           {:first, prefix, iter, offset, action}
 
@@ -522,21 +488,9 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start_by_prefix_cf(db, cf_ref, prefix, action) do
+  defp iterate_start_by_prefix(db, prefix, offset, action) do
     fn ->
-      case :rocksdb.iterator(db, cf_ref, prefix_same_as_start: true) do
-        {:ok, iter} ->
-          {:first, prefix, iter, action}
-
-        {:error, _reason} ->
-          :end_of_table
-      end
-    end
-  end
-
-  defp iterate_start_by_prefix_cf(db, cf_ref, prefix, offset, action) do
-    fn ->
-      case :rocksdb.iterator(db, cf_ref, prefix_same_as_start: true) do
+      case :rocksdb.iterator(db, prefix_same_as_start: true) do
         {:ok, iter} ->
           {:first, prefix, iter, offset, action}
 
@@ -648,11 +602,6 @@ defmodule ElixirRocksdb do
     Get count all records from the default column family.
   """
   def count(db), do: Enum.count(stream_iterator(db))
-
-  @doc """
-    Get count all records from the specified column family.
-  """
-  def count(db, cf_ref), do: Enum.count(stream_iterator_cf(db, cf_ref))
 
   @doc """
     Close Rocksdb database.
