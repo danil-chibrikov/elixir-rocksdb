@@ -566,16 +566,25 @@ defmodule ElixirRocksdb do
   @doc """
     Delete a key/value pair by key from the specified column family.
   """
-  def delete({db, cf_ref}, k, opts), do: :rocksdb.delete(db, cf_ref, k, opts)
+  def delete(db_ref, k, opts \\ []) do
+    case db_ref do
+      {db, cf_ref} ->
+        :rocksdb.delete(db, cf_ref, k, opts)
 
-  @doc """
-    Delete a key/value pair by key from the default column family.
-  """
-  def delete(db, k, opts), do: :rocksdb.delete(db, k, opts)
+      db ->
+        :rocksdb.delete(db, k, opts)
+    end
+  end
 
-  def single_delete({db, cf_ref}, k, opts), do: :rocksdb.single_delete(db, cf_ref, k, opts)
+  def single_delete(db_ref, k, opts \\ []) do
+    case db_ref do
+      {db, cf_ref} ->
+        :rocksdb.single_delete(db, cf_ref, k, opts)
 
-  def single_delete(db, k, opts), do: :rocksdb.single_delete(db, k, opts)
+      db ->
+        :rocksdb.single_delete(db, k, opts)
+    end
+  end
 
   @doc """
     Get count all records from the default column family.
