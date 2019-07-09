@@ -29,8 +29,9 @@ defmodule ElixirRocksdb do
 
   defp zip_cf_ref(cf_list, cf_ref_list) do
     [{"default", []} | cf_list]
-    |> Enum.map(fn {name, []} -> String.to_atom(name) end)
+    |> Enum.map(fn {name, _} -> String.to_atom(name) end)
     |> Enum.zip(cf_ref_list)
+    |> Enum.into(%{})
   end
 
   @doc """
