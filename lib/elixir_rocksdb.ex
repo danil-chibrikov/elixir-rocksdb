@@ -469,7 +469,7 @@ defmodule ElixirRocksdb do
   defp process_batch(_db_handle, []), do: :ok
 
   defp release_batch_condition(db_handle, batch) do
-    case :rocksdb.write_batch(db_handle, batch, sync: true) |> IO.inspect() do
+    case :rocksdb.write_batch(db_handle, batch, sync: true) do
       :ok ->
         :rocksdb.release_batch(batch)
 
@@ -609,7 +609,7 @@ defmodule ElixirRocksdb do
     case :rocksdb.iterator_move(itr, move) do
       {:ok, key, _} ->
         return_val = {:delete, cf_handle, key}
-        {[return_val], {:next, itr, action}}
+        {[return_val], {:next, itr, cf_handle, action}}
 
       {:error, _} ->
         {:halt, {:end_of_table, itr}}
@@ -840,11 +840,11 @@ defmodule ElixirRocksdb do
   end
 
   defp delete_condition(true, k, prefix, itr, cf_handle, action) do
-    {[{:delete, cf_handle, k}], {:next, prefix, itr, action}}
+    {[{:delete, cf_handle, k}], {:next, prefix, itr, {:cf, cf_handle}, action}}
   end
 
-  defp delete_condition(false, _, prefix, itr, _cf_handle, action) do
-    {[nil], {:next, prefix, itr, action}}
+  defp delete_condition(false, _, prefix, itr, cf_handle, action) do
+    {[nil], {:next, prefix, itr, cf_handle, action}}
   end
 
   defp delete_condition(true, k, prefix, itr, action) do
