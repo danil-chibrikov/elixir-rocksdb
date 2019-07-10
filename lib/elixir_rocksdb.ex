@@ -24,7 +24,7 @@ defmodule ElixirRocksdb do
   @opaque write_buffer_manager() :: :rocksdb.write_buffer_manager()
   @opaque snapshot_handle() :: :rocksdb.snapshot_handle()
 
-  @opaque stream_handle() :: db_handle() | {db_handle(), cf_handle()}
+  @type stream_handle() :: db_handle() | {db_handle(), cf_handle()}
 
   @type block_based_table_options() :: [
           {:no_block_cache, boolean()}
@@ -177,7 +177,7 @@ defmodule ElixirRocksdb do
     Open Rocksdb with column families.
   """
   @spec open(binary(), options(), list({atom(), cf_options()})) ::
-          {:ok, db_handle(), list(%{key: reference()})} | {:error, any()}
+          {:ok, db_handle(), map()} | {:error, any()}
   def open(path, db_opts, cf_descriptors) do
     cf_descs = create_cf_descs(cf_descriptors)
 
