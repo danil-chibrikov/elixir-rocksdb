@@ -466,6 +466,8 @@ defmodule ElixirRocksdb do
     end
   end
 
+  defp process_batch(_db_handle, []), do: :ok
+
   defp release_batch_condition(db_handle, batch) do
     case :rocksdb.write_batch(db_handle, batch, sync: true) |> IO.inspect() do
       :ok ->
