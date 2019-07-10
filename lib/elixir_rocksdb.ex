@@ -406,7 +406,10 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp check_record({action, k, v}) do
+  defp check_record({action, cf_handle, k}) when is_binary(k) and is_reference(cf_handle),
+    do: {action, cf_handle, k}
+
+  defp check_record({action, k, v}) when not is_reference(k) do
     case normalize_key_value(k, v) do
       {:error, :key_is_not_binary} ->
         {:error, :key_is_not_binary}
@@ -416,9 +419,19 @@ defmodule ElixirRocksdb do
     end
   end
 
+  defp check_record({_action, _cf_handle, _k}), do: {:error, :key_is_not_binary}
   defp check_record({action, k}) when is_binary(k), do: {action, k}
   defp check_record({_action, _k}), do: {:error, :key_is_not_binary}
-  defp check_record(_), do: {:error, :bad_argument}
+
+  defp check_record({action, cf_handle, k, v}) do
+    case normalize_key_value(k, v) do
+      {:error, :key_is_not_binary} ->
+        {:error, :key_is_not_binary}
+
+      {key, value} ->
+        {action, cf_handle, key, value}
+    end
+  end
 
   defp normalize_key_value(k, <<131, _::binary>> = v) when is_binary(k), do: {k, v}
   defp normalize_key_value(k, v) when is_binary(k), do: {k, :erlang.term_to_binary(v)}
@@ -451,12 +464,10 @@ defmodule ElixirRocksdb do
       {:error, reason} ->
         {:error, reason}
     end
-
-    release_batch_condition(db_handle, batch)
   end
 
   defp release_batch_condition(db_handle, batch) do
-    case :rocksdb.write_batch(db_handle, batch, sync: true) do
+    case :rocksdb.write_batch(db_handle, batch, sync: true) |> IO.inspect() do
       :ok ->
         :rocksdb.release_batch(batch)
 
@@ -896,7 +907,7 @@ defmodule ElixirRocksdb do
     Get count all records from the specified column family.
   """
   @spec count(db_handle(), cf_handle()) :: integer()
-  def count(db_handle, cf_handle), do: Enum.count(stream_iterator(db_handle, cf_handle))
+  def count(db_handle, cf_handle), do: Enum.count(stream_iterator({db_handle, cf_handle}))
 
   @doc """
     Close Rocksdb database.
