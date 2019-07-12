@@ -10,7 +10,7 @@ by adding `elixir_rocksdb` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:elixir_rocksdb, "~> 0.0.0"}
+    {:elixir_rocksdb, "~> 0.0.1"}
   ]
 end
 ```
