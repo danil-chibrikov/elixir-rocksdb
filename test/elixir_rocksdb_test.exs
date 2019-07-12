@@ -237,6 +237,7 @@ defmodule ElixirRocksdbTest do
     assert 0 == ElixirRocksdb.count(db)
   end
 
+  @tag :skip
   test "stream_iterator/3 with offset", %{db: db, test_db: test} do
     ElixirRocksdb.stream_delete_all(db)
     ElixirRocksdb.stream_delete_all(test)

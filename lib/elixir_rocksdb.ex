@@ -1,248 +1,492 @@
 defmodule ElixirRocksdb do
   require Logger
 
+  @type cache_type() :: :lru | :clock
+  @type compression_type() :: :snappy | :zlib | :bzip2 | :lz4 | :lz4h | :zstd | :none
+  @type compaction_style() :: :level | :universal | :fifo | :none
+  @type compaction_pri() ::
+          :compensated_size | :oldest_largest_seq_first | :oldest_smallest_seq_first
+  @type access_hint() :: :normal | :sequential | :willneed | :none
+  @type wal_recovery_mode() ::
+          :tolerate_corrupted_tail_records
+          | :absolute_consistency
+          | :point_in_time_recovery
+          | :skip_any_corrupted_records
+  @type env_type() :: :default | :memenv
+
+  @opaque env() :: env_type() | :rocksdb.env_handle()
+  @opaque db_handle() :: :rocksdb.db_handle()
+  @opaque cf_handle() :: :rocksdb.cf_handle()
+  @opaque itr_handle() :: :rocksdb.itr_handle()
+  @opaque batch_handle() :: :rocksdb.batch_handle()
+  @opaque cache_handle() :: :rocksdb.cache_handle()
+  @opaque rate_limiter_handle() :: :rocksdb.rate_limiter_handle()
+  @opaque write_buffer_manager() :: :rocksdb.write_buffer_manager()
+  @opaque snapshot_handle() :: :rocksdb.snapshot_handle()
+
+  @type stream_handle() :: db_handle() | {db_handle(), cf_handle()}
+
+  @type block_based_table_options() :: [
+          {:no_block_cache, boolean()}
+          | {:block_size, pos_integer()}
+          | {:block_cache, cache_handle()}
+          | {:block_cache_size, pos_integer()}
+          | {:bloom_filter_policy, pos_integer()}
+          | {:format_version, 0 | 1 | 2}
+          | {:cache_index_and_filter_blocks, boolean()}
+        ]
+
+  @type merge_operator() ::
+          :erlang_merge_operator
+          | :bitset_merge_operator
+          | {:bitset_merge_operator, non_neg_integer()}
+          | :counter_merge_operator
+
+  @type cf_options() :: [
+          {:block_cache_size_mb_for_point_lookup, non_neg_integer()}
+          | {:memtable_memory_budget, pos_integer()}
+          | {:write_buffer_size, pos_integer()}
+          | {:max_write_buffer_number, pos_integer()}
+          | {:min_write_buffer_number_to_merge, pos_integer()}
+          | {:compression, compression_type()}
+          | {:num_levels, pos_integer()}
+          | {:level0_file_num_compaction_trigger, integer()}
+          | {:level0_slowdown_writes_trigger, integer()}
+          | {:level0_stop_writes_trigger, integer()}
+          | {:max_mem_compaction_level, pos_integer()}
+          | {:target_file_size_base, pos_integer()}
+          | {:target_file_size_multiplier, pos_integer()}
+          | {:max_bytes_for_level_base, pos_integer()}
+          | {:max_bytes_for_level_multiplier, pos_integer()}
+          | {:max_compaction_bytes, pos_integer()}
+          | {:soft_rate_limit, float()}
+          | {:hard_rate_limit, float()}
+          | {:arena_block_size, integer()}
+          | {:disable_auto_compactions, boolean()}
+          | {:purge_redundant_kvs_while_flush, boolean()}
+          | {:compaction_style, compaction_style()}
+          | {:compaction_pri, compaction_pri()}
+          | {:filter_deletes, boolean()}
+          | {:max_sequential_skip_in_iterations, pos_integer()}
+          | {:inplace_update_support, boolean()}
+          | {:inplace_update_num_locks, pos_integer()}
+          | {:table_factory_block_cache_size, pos_integer()}
+          | {:in_memory_mode, boolean()}
+          | {:block_based_table_options, block_based_table_options()}
+          | {:level_compaction_dynamic_level_bytes, boolean()}
+          | {:optimize_filters_for_hits, boolean()}
+          | {:prefix_transform,
+             {:fixed_prefix_transform, integer()}
+             | {:capped_prefix_transform, integer()}}
+          | {:merge_operator, merge_operator()}
+        ]
+
+  @type db_options() :: [
+          {:env, env()}
+          | {:total_threads, pos_integer()}
+          | {:create_if_missing, boolean()}
+          | {:create_missing_column_families, boolean()}
+          | {:error_if_exists, boolean()}
+          | {:paranoid_checks, boolean()}
+          | {:max_open_files, integer()}
+          | {:max_total_wal_size, non_neg_integer()}
+          | {:use_fsync, boolean()}
+          | {:delete_obsolete_files_period_micros, pos_integer()}
+          | {:max_background_jobs, pos_integer()}
+          | {:max_background_compactions, pos_integer()}
+          | {:max_background_flushes, pos_integer()}
+          | {:max_log_file_size, non_neg_integer()}
+          | {:log_file_time_to_roll, non_neg_integer()}
+          | {:keep_log_file_num, pos_integer()}
+          | {:max_manifest_file_size, pos_integer()}
+          | {:table_cache_numshardbits, pos_integer()}
+          | {:wal_ttl_seconds, non_neg_integer()}
+          | {:manual_wal_flush, boolean()}
+          | {:wal_size_limit_mb, non_neg_integer()}
+          | {:manifest_preallocation_size, pos_integer()}
+          | {:allow_mmap_reads, boolean()}
+          | {:allow_mmap_writes, boolean()}
+          | {:is_fd_close_on_exec, boolean()}
+          | {:skip_log_error_on_recovery, boolean()}
+          | {:stats_dump_period_sec, non_neg_integer()}
+          | {:advise_random_on_open, boolean()}
+          | {:access_hint, access_hint()}
+          | {:compaction_readahead_size, non_neg_integer()}
+          | {:new_table_reader_for_compaction_inputs, boolean()}
+          | {:use_adaptive_mutex, boolean()}
+          | {:bytes_per_sync, non_neg_integer()}
+          | {:skip_stats_update_on_db_open, boolean()}
+          | {:wal_recovery_mode, wal_recovery_mode()}
+          | {:allow_concurrent_memtable_write, boolean()}
+          | {:enable_write_thread_adaptive_yield, boolean()}
+          | {:db_write_buffer_size, non_neg_integer()}
+          | {:in_memory, boolean()}
+          | {:rate_limiter, rate_limiter_handle()}
+          | {:write_buffer_manager, write_buffer_manager()}
+          | {:max_subcompactions, non_neg_integer()}
+        ]
+
+  @type options() :: db_options() | cf_options()
+
+  @type read_options() :: [
+          {:verify_checksums, boolean()}
+          | {:fill_cache, boolean()}
+          | {:iterate_upper_bound, binary()}
+          | {:iterate_lower_bound, binary()}
+          | {:tailing, boolean()}
+          | {:total_order_seek, boolean()}
+          | {:prefix_same_as_start, boolean()}
+          | {:snapshot, snapshot_handle()}
+        ]
+
+  @type write_options() :: [
+          {:sync, boolean()}
+          | {:disable_wal, boolean()}
+          | {:ignore_missing_column_families, boolean()}
+          | {:no_slowdown, boolean()}
+          | {:low_pri, boolean()}
+        ]
+
+  @type write_actions() :: [
+          {:put, binary(), any()}
+          | {:put, cf_handle(), binary(), any()}
+          | {:delete, binary()}
+          | {:delete, cf_handle(), any()}
+          | {:single_delete, binary()}
+          | {:single_delete, cf_handle(), binary()}
+          | :clear
+        ]
+
+  @type iterator_action() ::
+          :first
+          | :last
+          | :next
+          | :prev
+          | binary()
+          | {:seek, binary()}
+          | {:seek_for_prev, binary()}
+
   @doc """
     Open Rocksdb with the default column family.
   """
-  def open(path, opts), do: :rocksdb.open(to_charlist(path), opts)
+  @spec open(binary(), options()) ::
+          {:ok, db_handle()} | {:error, any()}
+  def open(path, db_opts), do: :rocksdb.open(to_charlist(path), db_opts)
 
   @doc """
-    Open Rocksdb with the specified column family.
+    Open Rocksdb with column families.
   """
-  def open(path, opts, cf_desc), do: :rocksdb.open(to_charlist(path), opts, cf_desc)
+  @spec open(binary(), options(), list({atom(), cf_options()})) ::
+          {:ok, db_handle(), map()} | {:error, any()}
+  def open(path, db_opts, cf_descriptors) do
+    cf_descs = create_cf_descs(cf_descriptors)
+
+    case :rocksdb.open(to_charlist(path), db_opts, cf_descs) do
+      {:ok, db_handle, cf_ref_list} ->
+        {:ok, db_handle, zip_cf_ref([{:default, []} | cf_descriptors], cf_ref_list)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   @doc """
   Create a new column family.
   """
-  def create_cf(db_ref, name, opts),
-    do: :rocksdb.create_column_family(db_ref, to_charlist(name), opts)
+  @spec create_cf(db_handle(), atom(), cf_options()) ::
+          {:ok, %{key: reference()}} | {:error, any()}
+  def create_cf(db_handle, name, cf_opts) do
+    case :rocksdb.create_column_family(db_handle, to_charlist(name), cf_opts) do
+      {:ok, cf_ref} ->
+        {:ok, zip_cf_ref([{name, []}], [cf_ref])}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Helpers column families
+
+  defp create_cf_descs(list) do
+    [
+      {'default', []}
+      | Enum.map(list, fn {cf, opts} -> {to_charlist(cf), opts} end)
+    ]
+  end
+
+  defp zip_cf_ref(cf_list, cf_ref_list) do
+    Enum.map(cf_list, fn {name, _} -> name end)
+    |> Enum.zip(cf_ref_list)
+    |> Enum.into(%{})
+  end
 
   @doc """
     List column families.
   """
-  def list_cf(db_name, opts \\ []) do
-    :rocksdb.list_column_families(db_name, opts)
-  end
+  @spec list_cf(binary(), db_options()) ::
+          {:ok, list(binary())} | {:error, any()}
+  def list_cf(name, db_opts), do: :rocksdb.list_column_families(to_charlist(name), db_opts)
+
+  @doc """
+    Is the database empty.
+  """
+  @spec is_empty?(db_handle()) ::
+          true | false
+  def is_empty?(db_handle), do: :rocksdb.is_empty(db_handle)
+
+  # @spec get(stream_handle :: stream_handle(), key :: binary(), read_opts :: read_options()) ::
+  #         {:ok, any()} | {:ok, nil} | {:error, any()}
+  # def get(stream_handle, key, read_opts) do
+  #   case stream_handle do
+  #     {db_handle, cf_handle} ->
+  #       :rocksdb.get(db_handle, cf_handle, key, read_opts)
+  #       |> get_condition()
+
+  #     db_handle ->
+  #       :rocksdb.get(db_handle, key, read_opts)
+  #       |> get_condition()
+  #   end
+  # end
 
   @doc """
     Retrieve a key/value pair in the default column family.
     Get only value. Value is term.
   """
-  def get(db, k, default \\ nil) do
-    case :rocksdb.get(db, k, []) do
-      {:ok, <<131, _::binary>> = value} ->
-        :erlang.binary_to_term(value)
-
-      :not_found ->
-        default
-
-      {:error, _reason} = val ->
-        process(val)
-    end
+  @spec get(db_handle(), binary(), read_options()) ::
+          {:ok, any()} | {:ok, nil} | {:error, any()}
+  def get(db_handle, key, read_opts) do
+    :rocksdb.get(db_handle, key, read_opts)
+    |> get_condition()
   end
+
+  @doc """
+    Retrieve a key/value pair in the specified column family.
+    Get only value. Value is term.
+  """
+  @spec get(db_handle(), cf_handle(), binary(), read_options()) ::
+          {:ok, any()} | {:ok, nil} | {:error, any()}
+  def get(db_handle, cf_handle, key, read_opts) do
+    :rocksdb.get(db_handle, cf_handle, key, read_opts)
+    |> get_condition()
+  end
+
+  # Get helpers
+
+  defp get_condition({:ok, <<131, _::binary>> = value}), do: {:ok, :erlang.binary_to_term(value)}
+  defp get_condition(:not_found), do: {:ok, nil}
+  defp get_condition({:error, reason}), do: {:error, reason}
 
   @doc """
     Put a key/value pair into the default column family.
     Key and value only binary.
   """
-  def put(db, k, v) do
-    case check_record(k, v) do
-      {key, value} ->
-        :rocksdb.put(db, key, value, [])
-        |> process
+  @spec put(db_handle(), binary(), any(), write_options()) ::
+          :ok | {:error, any()}
+  def put(db_handle, key, value, write_opts) do
+    case check_record(key, value) do
+      {:error, reason} ->
+        {:error, reason}
 
-      _ ->
-        :ok
+      {key, value} ->
+        :rocksdb.put(db_handle, key, value, write_opts)
     end
   end
 
   @doc """
-    Put a key/value pair into the default column family.
+    Put a key/value pair into the specified column family.
     Key and value only binary.
   """
-  def put(db, cf_ref, k, v) do
-    case check_record(k, v) do
-      {key, value} ->
-        :rocksdb.put(db, cf_ref, key, value, [])
-        |> process
+  @spec put(db_handle(), cf_handle(), binary(), any(), write_options()) ::
+          :ok | {:error, any()}
+  def put(db_handle, cf_handle, key, value, write_opts) do
+    case check_record(key, value) do
+      {:error, reason} ->
+        {:error, reason}
 
-      _ ->
-        :ok
+      {key, value} ->
+        :rocksdb.put(db_handle, cf_handle, key, value, write_opts)
     end
   end
 
-  # Put helpers
-
-  defp process(:ok), do: :ok
-
-  defp process({:error, reason}) do
-    Logger.error("#{__MODULE__}: failed processing, reason: #{inspect(reason)}")
-    :error
-  end
-
   @doc """
-    Put a key/value pair batch into the default column family.
+    Put a key/value pair batch into the default/specified column family.
     Key and value only binary.
   """
-  def put_batch(db, [_ | _] = pairs) do
+  @spec put_batch(db_handle(), list({binary(), any()} | {cf_handle(), binary(), any()})) ::
+          :ok | {:error, any()}
+  def put_batch(db_handle, [_ | _] = pairs) do
     items =
-      pairs
-      |> Enum.map(fn
-        {k, v} ->
-          check_record({:put, k, v})
+      Stream.map(pairs, fn
+        {key, value} ->
+          check_record({:put, key, value})
+
+        {cf_handle, key, value} ->
+          check_record({:put, cf_handle, key, value})
 
         _ ->
           nil
       end)
+      |> Stream.reject(&is_nil/1)
+      |> Enum.map(&batch_condition/1)
 
-    process_batch(db, items)
+    process_batch(db_handle, items)
   end
 
-  def put_batch(_, []), do: :ok
+  def put_batch(_db_handle, []), do: :ok
 
   @doc """
-    Delete a key batch into the default column family.
+    Delete a key batch into the default/specified column family.
     Key only binary.
   """
-  def del_batch(db, [_ | _] = pairs) do
+  @spec delete_batch(db_handle(), list({binary(), any()} | {cf_handle(), binary(), any()})) ::
+          :ok | {:error, any()}
+  def delete_batch(db_handle, [_ | _] = pairs) do
     items =
-      pairs
-      |> Enum.map(fn k ->
-        check_record({:del, k})
-      end)
+      Stream.map(pairs, fn
+        {cf_handle, key} ->
+          check_record({:delete, cf_handle, key})
 
-    process_batch(db, items)
+        key ->
+          check_record({:delete, key})
+      end)
+      |> Stream.reject(&is_nil/1)
+      |> Enum.map(&batch_condition/1)
+
+    process_batch(db_handle, items)
   end
 
-  def del_batch(_, []), do: :ok
+  def delete_batch(_db_handle, []), do: :ok
 
   @doc """
-    Put/delete a (key/value)/key batch into the default column family.
+    Put/delete a (key/value)/key batch into the default/specified column family.
     Key and value only binary.
   """
-  def batch(db, [_ | _] = pairs) do
+  @spec batch(
+          db_handle(),
+          list({atom(), binary(), any()} | {atom(), cf_handle(), binary(), any()})
+        ) ::
+          :ok | {:error, any()}
+  def batch(db_handle, [_ | _] = pairs) do
     items =
-      pairs
-      |> Enum.map(fn elem ->
-        check_record(elem)
+      Stream.map(pairs, fn
+        {_action, _key, _value} = elem ->
+          check_record(elem)
+
+        {_action, _cf_handle, _key, _value} = elem ->
+          check_record(elem)
+
+        _ ->
+          nil
       end)
+      |> Stream.reject(&is_nil/1)
+      |> Enum.map(&batch_condition/1)
 
-    process_batch(db, items)
+    process_batch(db_handle, items)
   end
-
-  def batch(_, []), do: :ok
-
-  def batch(db, cf_ref, [_ | _] = pairs) do
-    items =
-      pairs
-      |> Enum.map(fn elem ->
-        check_record(elem)
-      end)
-
-    process_batch_cf(db, cf_ref, items)
-  end
-
-  def batch(_, _, []), do: :ok
 
   # Batch helpers
 
+  defp batch_condition({:error, _reason}), do: nil
+  defp batch_condition({:put, _cf_handle, _key, _value} = tuple), do: tuple
+  defp batch_condition({:delete, _cf_handle, _key} = tuple), do: tuple
+  defp batch_condition({:put, _key, _value} = tuple), do: tuple
+  defp batch_condition({:delete, _key} = tuple), do: tuple
+  defp batch_condition({:single_delete, _key} = tuple), do: tuple
+  defp batch_condition({:single_delete, _cf_handle, _key} = tuple), do: tuple
+  defp batch_condition(:clear), do: :clear
+  defp batch_condition(_), do: nil
+
   defp check_record(k, v) do
     case normalize_key_value(k, v) do
-      {:error, msg} ->
-        Logger.error("#{__MODULE__}: #{inspect(msg)}")
-        nil
+      {:error, :key_is_not_binary} ->
+        {:error, :key_is_not_binary}
 
       {key, value} ->
         {key, value}
     end
   end
 
-  defp check_record({m, k, v}) do
+  defp check_record({action, cf_handle, k}) when is_binary(k) and is_reference(cf_handle),
+    do: {action, cf_handle, k}
+
+  defp check_record({action, k, v}) when not is_reference(k) do
     case normalize_key_value(k, v) do
-      {:error, msg} ->
-        Logger.error("#{__MODULE__}: #{inspect(msg)}")
-        nil
+      {:error, :key_is_not_binary} ->
+        {:error, :key_is_not_binary}
 
       {key, value} ->
-        {m, key, value}
+        {action, key, value}
     end
   end
 
-  defp check_record({m, k}) when is_binary(k), do: {m, k}
+  defp check_record({_action, _cf_handle, _k}), do: {:error, :key_is_not_binary}
+  defp check_record({action, k}) when is_binary(k), do: {action, k}
+  defp check_record({_action, _k}), do: {:error, :key_is_not_binary}
 
-  defp check_record({_, k}) do
-    Logger.info("#{__MODULE__}: key: #{inspect(k)} isn't binary")
-    nil
+  defp check_record({action, cf_handle, k, v}) do
+    case normalize_key_value(k, v) do
+      {:error, :key_is_not_binary} ->
+        {:error, :key_is_not_binary}
+
+      {key, value} ->
+        {action, cf_handle, key, value}
+    end
   end
-
-  defp check_record(_), do: nil
-
-  defp normalize_key_value(k, v) when is_reference(k),
-    do: normalize_key_value(:erlang.term_to_binary(k), v)
 
   defp normalize_key_value(k, <<131, _::binary>> = v) when is_binary(k), do: {k, v}
   defp normalize_key_value(k, v) when is_binary(k), do: {k, :erlang.term_to_binary(v)}
-  defp normalize_key_value(k, _), do: {:error, "#{__MODULE__}: key: #{inspect(k)} isn't binary"}
+  defp normalize_key_value(_k, _v), do: {:error, :key_is_not_binary}
 
-  defp process_batch(db, [_ | _] = items) do
+  defp process_batch(db_handle, [_ | _] = items) do
     {:ok, batch} = :rocksdb.batch()
 
     Enum.each(items, fn
-      {:put, k, v} ->
-        :rocksdb.batch_put(batch, k, v)
+      {:put, key, value} ->
+        :rocksdb.batch_put(batch, key, value)
 
-      {:del, k} ->
-        :rocksdb.batch_delete(batch, k)
+      {:put, cf_handle, key, value} ->
+        :rocksdb.batch_put(batch, cf_handle, key, value)
+
+      {:delete, key} ->
+        :rocksdb.batch_delete(batch, key)
+
+      {:delete, cf_handle, key} ->
+        :rocksdb.batch_delete(batch, cf_handle, key)
 
       _ ->
         :ok
     end)
 
-    case :rocksdb.write_batch(db, batch, sync: true) do
+    case :rocksdb.write_batch(db_handle, batch, sync: true) do
+      :ok ->
+        release_batch_condition(db_handle, batch)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp process_batch(_db_handle, []), do: :ok
+
+  defp release_batch_condition(db_handle, batch) do
+    case :rocksdb.write_batch(db_handle, batch, sync: true) do
       :ok ->
         :rocksdb.release_batch(batch)
 
       {:error, reason} ->
-        Logger.error("#{__MODULE__}: batch: #{inspect(reason)}")
-        :error
+        {:error, reason}
     end
   end
-
-  defp process_batch(_, []), do: :ok
-
-  defp process_batch_cf(db, cf_ref, [_ | _] = items) do
-    {:ok, batch} = :rocksdb.batch()
-
-    Enum.each(items, fn
-      {:put, k, v} ->
-        :rocksdb.batch_put(batch, cf_ref, k, v)
-
-      {:del, k} ->
-        :rocksdb.batch_delete(batch, cf_ref, k)
-
-      _ ->
-        :ok
-    end)
-
-    case :rocksdb.write_batch(db, batch, sync: true) do
-      :ok ->
-        :rocksdb.release_batch(batch)
-
-      {:error, reason} ->
-        Logger.error("#{__MODULE__}: batch: #{inspect(reason)}")
-        :error
-    end
-  end
-
-  defp process_batch_cf(_, _, []), do: :ok
 
   @doc """
     Return a iterator over the contents of the database.
   """
-  def iterator(db, opts) do
-    case :rocksdb.iterator(db, opts) do
-      {:ok, iter} ->
-        iter
+  @spec iterator(db_handle(), read_options()) ::
+          itr_handle() | :end_of_table
+  def iterator(db_handle, read_opts) do
+    case :rocksdb.iterator(db_handle, read_opts) do
+      {:ok, itr} ->
+        itr
 
       {:error, _} ->
         :end_of_table
@@ -250,12 +494,15 @@ defmodule ElixirRocksdb do
   end
 
   @doc """
-    Return a iterator over the contents of the database from column family.
+    Return a iterator over the contents of the database
+      from specified column family.
   """
-  def iterator(db, cf_ref, opts) do
-    case :rocksdb.iterator(db, cf_ref, opts) do
-      {:ok, iter} ->
-        iter
+  @spec iterator(db_handle(), cf_handle(), read_options()) ::
+          itr_handle() | :end_of_table
+  def iterator(db_handle, cf_handle, read_opts) do
+    case :rocksdb.iterator(db_handle, cf_handle, read_opts) do
+      {:ok, itr} ->
+        itr
 
       {:error, _} ->
         :end_of_table
@@ -266,10 +513,12 @@ defmodule ElixirRocksdb do
     Move to the specified place.
     Return key/value pair, when value is term.
   """
-  def iterator_move(iter, opts) do
-    case :rocksdb.iterator_move(iter, opts) do
-      {:ok, k, v} ->
-        {k, :erlang.binary_to_term(v)}
+  @spec iterator_move(itr_handle(), iterator_action()) ::
+          {binary(), any()} | :end_of_table
+  def iterator_move(itr_handle, itr_action) do
+    case :rocksdb.iterator_move(itr_handle, itr_action) do
+      {:ok, key, value} ->
+        {key, :erlang.binary_to_term(value)}
 
       {:error, _} ->
         :end_of_table
@@ -278,65 +527,43 @@ defmodule ElixirRocksdb do
 
   @doc """
     Return stream with all key/value pair, when value is term
-      from default column family.
+      from default/specified column family.
   """
-  def stream_iterator(db) do
+  @spec stream_iterator(stream_handle()) ::
+          Stream.t()
+  def stream_iterator(stream_handle) do
     Stream.resource(
-      iterate_start(db, :iterate),
+      iterate_start(stream_handle, :iterate),
       &iterate_step/1,
       &iterate_end/1
     )
   end
 
   @doc """
-    Return stream with all key/value pair, when value is term
-      from specified column family.
+    Delete all key/value pair from default/specified column family.
   """
-  def stream_iterator_cf(db, cf_ref) do
-    Stream.resource(
-      iterate_start(db, cf_ref, :iterate),
-      &iterate_step/1,
-      &iterate_end/1
-    )
-  end
-
-  @doc """
-    Delete all key/value pair from default column family.
-  """
-  def stream_delete_all(db) do
+  @spec stream_delete_all(stream_handle()) ::
+          :ok | {:error, any()}
+  def stream_delete_all(stream_handle) do
     batch =
       Stream.resource(
-        iterate_start(db, :delete),
+        iterate_start(stream_handle, :delete),
         &iterate_step/1,
         &iterate_end/1
       )
       |> Enum.to_list()
 
-    process_batch(db, batch)
-  end
-
-  @doc """
-    Delete all key/value pair from specified column family.
-  """
-  def stream_delete_cf_all(db, cf_ref) do
-    batch =
-      Stream.resource(
-        iterate_start(db, cf_ref, :delete),
-        &iterate_step/1,
-        &iterate_end/1
-      )
-      |> Enum.to_list()
-
-    process_batch_cf(db, cf_ref, batch)
+    handle = parse_stream_handle(stream_handle)
+    process_batch(handle, batch)
   end
 
   # Stream iterator helpers functions
 
-  defp iterate_start(db, action) do
+  defp iterate_start({db_handle, cf_handle}, action) do
     fn ->
-      case :rocksdb.iterator(db, []) do
-        {:ok, iter} ->
-          {:first, iter, action}
+      case :rocksdb.iterator(db_handle, cf_handle, []) do
+        {:ok, itr} ->
+          {:first, itr, cf_handle, action}
 
         {:error, _reason} ->
           :end_of_table
@@ -344,11 +571,11 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start(db, cf_ref, action) do
+  defp iterate_start(db_handle, action) do
     fn ->
-      case :rocksdb.iterator(db, cf_ref, []) do
-        {:ok, iter} ->
-          {:first, iter, action}
+      case :rocksdb.iterator(db_handle, []) do
+        {:ok, itr} ->
+          {:first, itr, action}
 
         {:error, _reason} ->
           :end_of_table
@@ -356,54 +583,66 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_step({move, iter, :iterate = action}) do
-    case :rocksdb.iterator_move(iter, move) do
-      {:ok, k, v} ->
-        return_val = {k, :erlang.binary_to_term(v)}
-        {[return_val], {:next, iter, action}}
+  defp iterate_step({move, itr, _cf_handle, :iterate = action}) do
+    case :rocksdb.iterator_move(itr, move) do
+      {:ok, key, value} ->
+        return_val = {key, :erlang.binary_to_term(value)}
+        {[return_val], {:next, itr, action}}
 
       {:error, _} ->
-        {:halt, {:end_of_table, iter}}
+        {:halt, {:end_of_table, itr}}
     end
   end
 
-  defp iterate_step({move, iter, :delete = action}) do
-    case :rocksdb.iterator_move(iter, move) do
-      {:ok, k, _} ->
-        return_val = {:del, k}
-        {[return_val], {:next, iter, action}}
+  defp iterate_step({move, itr, :iterate = action}) do
+    case :rocksdb.iterator_move(itr, move) do
+      {:ok, key, value} ->
+        return_val = {key, :erlang.binary_to_term(value)}
+        {[return_val], {:next, itr, action}}
 
       {:error, _} ->
-        {:halt, {:end_of_table, iter}}
+        {:halt, {:end_of_table, itr}}
+    end
+  end
+
+  defp iterate_step({move, itr, cf_handle, :delete = action}) do
+    case :rocksdb.iterator_move(itr, move) do
+      {:ok, key, _} ->
+        return_val = {:delete, cf_handle, key}
+        {[return_val], {:next, itr, cf_handle, action}}
+
+      {:error, _} ->
+        {:halt, {:end_of_table, itr}}
+    end
+  end
+
+  defp iterate_step({move, itr, :delete = action}) do
+    case :rocksdb.iterator_move(itr, move) do
+      {:ok, key, _} ->
+        return_val = {:delete, key}
+        {[return_val], {:next, itr, action}}
+
+      {:error, _} ->
+        {:halt, {:end_of_table, itr}}
     end
   end
 
   defp iterate_step(:end_of_table), do: nil
 
   defp iterate_end(nil), do: nil
-  defp iterate_end({:next, iter, _}), do: iterator_close(iter)
-  defp iterate_end({_, iter}), do: iterator_close(iter)
-  defp iterate_end({_, iter, _}), do: iterator_close(iter)
+  defp iterate_end({:next, itr, _}), do: iterator_close(itr)
+  defp iterate_end({_, itr}), do: iterator_close(itr)
+  defp iterate_end({_, itr, _}), do: iterator_close(itr)
 
   @doc """
     Return stream with all key/value pair by prefix, when value is term
-     from default column family.
+     from default/specified column family.
   """
-  def stream_iterator(db, prefix) do
+  @spec stream_iterator(stream_handle(), binary()) ::
+          Stream.t()
+  def stream_iterator(stream_handle, prefix) do
     Stream.resource(
-      iterate_start_by_prefix(db, prefix, :iterate),
-      &iterate_step_by_prefix/1,
-      &iterate_end_by_prefix/1
-    )
-  end
-
-  @doc """
-    Return stream with all key/value pair by prefix, when value is term
-     from specified column family.
-  """
-  def stream_iterator_cf(db, cf_ref, prefix) do
-    Stream.resource(
-      iterate_start_by_prefix_cf(db, cf_ref, prefix, :iterate),
+      iterate_start_by_prefix(stream_handle, prefix, :iterate),
       &iterate_step_by_prefix/1,
       &iterate_end_by_prefix/1
     )
@@ -411,23 +650,14 @@ defmodule ElixirRocksdb do
 
   @doc """
     Return stream with all key/value pair by prefix with offset,
-      when value is term from default column family.
+      when value is term from default/specified column family.
+    Offset is the last key in the previous iteration.
   """
-  def stream_iterator(db, prefix, offset) do
+  @spec stream_iterator(stream_handle(), binary(), binary()) ::
+          Stream.t()
+  def stream_iterator(stream_handle, prefix, offset) do
     Stream.resource(
-      iterate_start_by_prefix(db, prefix, offset, :iterate),
-      &iterate_step_by_prefix/1,
-      &iterate_end_by_prefix/1
-    )
-  end
-
-  @doc """
-    Return stream with all key/value pair by prefix with offset,
-      when value is term from specified column family.
-  """
-  def stream_iterator_cf(db, cf_ref, prefix, offset) do
-    Stream.resource(
-      iterate_start_by_prefix_cf(db, cf_ref, prefix, offset, :iterate),
+      iterate_start_by_prefix(stream_handle, prefix, offset, :iterate),
       &iterate_step_by_prefix/1,
       &iterate_end_by_prefix/1
     )
@@ -436,37 +666,31 @@ defmodule ElixirRocksdb do
   @doc """
     Delete all key/value pair by prefix from default column family.
   """
-  def stream_delete_all(db, prefix) do
+  @spec stream_delete_all(stream_handle(), binary()) ::
+          :ok | {:error, any()}
+  def stream_delete_all(stream_handle, prefix) do
     batch =
       Stream.resource(
-        iterate_start_by_prefix(db, prefix, :delete),
+        iterate_start_by_prefix(stream_handle, prefix, :delete),
         &iterate_step_by_prefix/1,
         &iterate_end_by_prefix/1
       )
       |> Enum.reject(&is_nil/1)
 
-    process_batch(db, batch)
+    handle = parse_stream_handle(stream_handle)
+    process_batch(handle, batch)
   end
 
-  def stream_delete_all(db, cf_ref, prefix) do
-    batch =
-      Stream.resource(
-        iterate_start_by_prefix_cf(db, cf_ref, prefix, :delete),
-        &iterate_step_by_prefix/1,
-        &iterate_end_by_prefix/1
-      )
-      |> Enum.reject(&is_nil/1)
-
-    process_batch_cf(db, cf_ref, batch)
-  end
+  defp parse_stream_handle({db_handle, _cf_handle}), do: db_handle
+  defp parse_stream_handle(db_handle), do: db_handle
 
   # Stream iterator helpers functions
 
-  defp iterate_start_by_prefix(db, prefix, action) do
+  defp iterate_start_by_prefix({db_handle, cf_handle}, prefix, action) do
     fn ->
-      case :rocksdb.iterator(db, prefix_same_as_start: true) do
-        {:ok, iter} ->
-          {:first, prefix, iter, action}
+      case :rocksdb.iterator(db_handle, cf_handle, prefix_same_as_start: true) do
+        {:ok, itr} ->
+          {:first, prefix, itr, {:cf, cf_handle}, action}
 
         {:error, _reason} ->
           :end_of_table
@@ -474,11 +698,11 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start_by_prefix(db, prefix, offset, action) do
+  defp iterate_start_by_prefix(db_handle, prefix, action) do
     fn ->
-      case :rocksdb.iterator(db, prefix_same_as_start: true) do
-        {:ok, iter} ->
-          {:first, prefix, iter, offset, action}
+      case :rocksdb.iterator(db_handle, prefix_same_as_start: true) do
+        {:ok, itr} ->
+          {:first, prefix, itr, action}
 
         {:error, _reason} ->
           :end_of_table
@@ -486,11 +710,11 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start_by_prefix_cf(db, cf_ref, prefix, action) do
+  defp iterate_start_by_prefix({db_handle, cf_handle}, prefix, offset, action) do
     fn ->
-      case :rocksdb.iterator(db, cf_ref, prefix_same_as_start: true) do
-        {:ok, iter} ->
-          {:first, prefix, iter, action}
+      case :rocksdb.iterator(db_handle, cf_handle, prefix_same_as_start: true) do
+        {:ok, itr} ->
+          {:first, prefix, itr, {:cf, cf_handle}, offset, action}
 
         {:error, _reason} ->
           :end_of_table
@@ -498,11 +722,11 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_start_by_prefix_cf(db, cf_ref, prefix, offset, action) do
+  defp iterate_start_by_prefix(db_handle, prefix, offset, action) do
     fn ->
-      case :rocksdb.iterator(db, cf_ref, prefix_same_as_start: true) do
-        {:ok, iter} ->
-          {:first, prefix, iter, offset, action}
+      case :rocksdb.iterator(db_handle, prefix_same_as_start: true) do
+        {:ok, itr} ->
+          {:first, prefix, itr, offset, action}
 
         {:error, _reason} ->
           :end_of_table
@@ -510,42 +734,81 @@ defmodule ElixirRocksdb do
     end
   end
 
-  defp iterate_step_by_prefix({move, prefix, iter, :iterate = action}) do
+  defp iterate_step_by_prefix({move, prefix, itr, {:cf, _cf_handle}, :iterate = action}) do
     upd_move = check_move(move, prefix)
 
-    case :rocksdb.iterator_move(iter, upd_move) do
+    case :rocksdb.iterator_move(itr, upd_move) do
       {:ok, k, v} ->
         String.starts_with?(k, prefix)
-        |> start_with_prefix(k, :erlang.binary_to_term(v), prefix, iter, action)
+        |> start_with_prefix(k, :erlang.binary_to_term(v), prefix, itr, action)
 
       {:error, _} ->
-        {:halt, {prefix, :end_of_table, iter}}
+        {:halt, {prefix, :end_of_table, itr}}
     end
   end
 
-  defp iterate_step_by_prefix({move, prefix, iter, offset, :iterate = action}) do
+  defp iterate_step_by_prefix({move, prefix, itr, :iterate = action}) do
     upd_move = check_move(move, prefix)
 
-    case :rocksdb.iterator_move(iter, upd_move) do
+    case :rocksdb.iterator_move(itr, upd_move) do
       {:ok, k, v} ->
         String.starts_with?(k, prefix)
-        |> start_with_prefix(k, :erlang.binary_to_term(v), prefix, iter, offset, action)
+        |> start_with_prefix(k, :erlang.binary_to_term(v), prefix, itr, action)
 
       {:error, _} ->
-        {:halt, {prefix, :end_of_table, iter}}
+        {:halt, {prefix, :end_of_table, itr}}
     end
   end
 
-  defp iterate_step_by_prefix({move, prefix, iter, :delete = action}) do
+  defp iterate_step_by_prefix({move, prefix, itr, {:cf, _cf_handle}, offset, :iterate = action}) do
     upd_move = check_move(move, prefix)
 
-    case :rocksdb.iterator_move(iter, upd_move) do
+    case :rocksdb.iterator_move(itr, upd_move) do
+      {:ok, k, v} ->
+        String.starts_with?(k, prefix)
+        |> start_with_prefix(k, :erlang.binary_to_term(v), prefix, itr, offset, action)
+
+      {:error, _} ->
+        {:halt, {prefix, :end_of_table, itr}}
+    end
+  end
+
+  defp iterate_step_by_prefix({move, prefix, itr, offset, :iterate = action}) do
+    upd_move = check_move(move, prefix)
+
+    case :rocksdb.iterator_move(itr, upd_move) do
+      {:ok, k, v} ->
+        String.starts_with?(k, prefix)
+        |> start_with_prefix(k, :erlang.binary_to_term(v), prefix, itr, offset, action)
+
+      {:error, _} ->
+        {:halt, {prefix, :end_of_table, itr}}
+    end
+  end
+
+  defp iterate_step_by_prefix({move, prefix, itr, {:cf, cf_handle}, :delete = action}) do
+    upd_move = check_move(move, prefix)
+
+    case :rocksdb.iterator_move(itr, upd_move) do
       {:ok, k, _} ->
         String.starts_with?(k, prefix)
-        |> delete_condition(k, prefix, iter, action)
+        |> delete_condition(k, prefix, itr, cf_handle, action)
 
       {:error, _} ->
-        {:halt, {prefix, :end_of_table, iter}}
+        {:halt, {prefix, :end_of_table, itr}}
+    end
+  end
+
+  defp iterate_step_by_prefix({move, prefix, itr, :delete = action}) do
+    upd_move = check_move(move, prefix)
+
+    case :rocksdb.iterator_move(itr, upd_move) do
+      {:ok, k, _} ->
+        String.starts_with?(k, prefix)
+        |> delete_condition(k, prefix, itr, action)
+
+      {:error, _} ->
+        {:halt, {prefix, :end_of_table, itr}}
     end
   end
 
@@ -554,95 +817,103 @@ defmodule ElixirRocksdb do
   defp check_move(:first, prefix), do: {:seek, prefix}
   defp check_move(:next, _), do: :next
 
-  defp start_with_prefix(true, k, v, prefix, iter, action) do
-    {[{k, v}], {:next, prefix, iter, action}}
+  defp start_with_prefix(true, k, v, prefix, itr, action) do
+    {[{k, v}], {:next, prefix, itr, action}}
   end
 
-  defp start_with_prefix(false, _, _, prefix, iter, _) do
-    {:halt, {prefix, :end_of_table, iter}}
+  defp start_with_prefix(false, _, _, prefix, itr, _) do
+    {:halt, {prefix, :end_of_table, itr}}
   end
 
-  defp start_with_prefix(true, k, v, prefix, iter, offset, action) do
+  defp start_with_prefix(true, k, v, prefix, itr, offset, action) do
     cond do
       k > offset ->
-        {[{k, v}], {:next, prefix, iter, offset, action}}
+        {[{k, v}], {:next, prefix, itr, offset, action}}
 
       true ->
-        {[], {:next, prefix, iter, offset, action}}
+        {[], {:next, prefix, itr, offset, action}}
     end
   end
 
-  defp start_with_prefix(false, _, _, prefix, iter, _, _) do
-    {:halt, {prefix, :end_of_table, iter}}
+  defp start_with_prefix(false, _, _, prefix, itr, _, _) do
+    {:halt, {prefix, :end_of_table, itr}}
   end
 
-  defp delete_condition(true, k, prefix, iter, action) do
-    {[{:del, k}], {:next, prefix, iter, action}}
+  defp delete_condition(true, k, prefix, itr, cf_handle, action) do
+    {[{:delete, cf_handle, k}], {:next, prefix, itr, {:cf, cf_handle}, action}}
   end
 
-  defp delete_condition(false, _, prefix, iter, action) do
-    {[nil], {:next, prefix, iter, action}}
+  defp delete_condition(false, _, prefix, itr, cf_handle, action) do
+    {[nil], {:next, prefix, itr, cf_handle, action}}
+  end
+
+  defp delete_condition(true, k, prefix, itr, action) do
+    {[{:delete, k}], {:next, prefix, itr, action}}
+  end
+
+  defp delete_condition(false, _, prefix, itr, action) do
+    {[nil], {:next, prefix, itr, action}}
   end
 
   defp iterate_end_by_prefix(nil), do: nil
-  defp iterate_end_by_prefix({:next, _, iter, _}), do: iterator_close(iter)
-  defp iterate_end_by_prefix({:next, _, iter, _, _}), do: iterator_close(iter)
-  defp iterate_end_by_prefix({_, _, iter}), do: iterator_close(iter)
+  defp iterate_end_by_prefix({:next, _, itr, _}), do: iterator_close(itr)
+  defp iterate_end_by_prefix({:next, _, itr, _, _}), do: iterator_close(itr)
+  defp iterate_end_by_prefix({_, _, itr}), do: iterator_close(itr)
 
   @doc """
     Close a iterator.
   """
-  def iterator_close(iter), do: :rocksdb.iterator_close(iter)
+  @spec iterator_close(itr_handle()) :: :ok
+  def iterator_close(itr_handle), do: :rocksdb.iterator_close(itr_handle)
 
   @doc """
     Delete a key/value pair by key from the default column family.
   """
-  def delete(db, k), do: :rocksdb.delete(db, k, [])
+  @spec delete(db_handle(), binary(), write_options()) ::
+          :ok | {:error, any()}
+  def delete(db_handle, key, write_opts), do: :rocksdb.delete(db_handle, key, write_opts)
+
+  @doc """
+    Delete a key/value pair by key from the specified column family.
+  """
+  @spec delete(db_handle(), cf_handle(), binary(), write_options()) ::
+          :ok | {:error, any()}
+  def delete(db_handle, cf_handle, key, write_opts),
+    do: :rocksdb.delete(db_handle, cf_handle, key, write_opts)
+
+  @doc """
+    Delete a key/value pair by key from the default column family.
+    Requires that the key exists and was not overwritten.
+  """
+  @spec single_delete(db_handle(), binary(), write_options()) ::
+          :ok | {:error, any()}
+  def single_delete(db_handle, key, write_opts),
+    do: :rocksdb.single_delete(db_handle, key, write_opts)
+
+  @doc """
+    Delete a key/value pair by key from the specified column family.
+    Requires that the key exists and was not overwritten.
+  """
+  @spec single_delete(db_handle(), cf_handle(), binary(), write_options()) ::
+          :ok | {:error, any()}
+  def single_delete(db_handle, cf_handle, key, write_opts),
+    do: :rocksdb.single_delete(db_handle, cf_handle, key, write_opts)
 
   @doc """
     Get count all records from the default column family.
   """
-  def count(db), do: Enum.count(stream_iterator(db))
+  @spec count(db_handle()) :: integer()
+  def count(db_handle), do: Enum.count(stream_iterator(db_handle))
 
   @doc """
     Get count all records from the specified column family.
   """
-  def count(db, cf_ref), do: Enum.count(stream_iterator_cf(db, cf_ref))
+  @spec count(db_handle(), cf_handle()) :: integer()
+  def count(db_handle, cf_handle), do: Enum.count(stream_iterator({db_handle, cf_handle}))
 
   @doc """
     Close Rocksdb database.
   """
-  def close(db), do: :rocksdb.close(db)
-
-  @doc """
-    Create item to hex for further sorting capability from Rocksdb.
-  """
-  def to_hex(item) when is_integer(item) do
-    <<y1::4, y2::4, y3::4, y4::4, y5::4, y6::4, y7::4, y8::4, y9::4, y10::4, y11::4, y12::4,
-      y13::4, y14::4, y15::4, y16::4>> = <<item::size(64)>>
-
-    <<byte_to_hex(y1)::binary(), byte_to_hex(y2)::binary(), byte_to_hex(y3)::binary(),
-      byte_to_hex(y4)::binary(), byte_to_hex(y5)::binary(), byte_to_hex(y6)::binary(),
-      byte_to_hex(y7)::binary(), byte_to_hex(y8)::binary(), byte_to_hex(y9)::binary(),
-      byte_to_hex(y10)::binary(), byte_to_hex(y11)::binary(), byte_to_hex(y12)::binary(),
-      byte_to_hex(y13)::binary(), byte_to_hex(y14)::binary(), byte_to_hex(y15)::binary(),
-      byte_to_hex(y16)::binary()>>
-  end
-
-  defp byte_to_hex(0), do: "0"
-  defp byte_to_hex(1), do: "1"
-  defp byte_to_hex(2), do: "2"
-  defp byte_to_hex(3), do: "3"
-  defp byte_to_hex(4), do: "4"
-  defp byte_to_hex(5), do: "5"
-  defp byte_to_hex(6), do: "6"
-  defp byte_to_hex(7), do: "7"
-  defp byte_to_hex(8), do: "8"
-  defp byte_to_hex(9), do: "9"
-  defp byte_to_hex(10), do: "A"
-  defp byte_to_hex(11), do: "B"
-  defp byte_to_hex(12), do: "C"
-  defp byte_to_hex(13), do: "D"
-  defp byte_to_hex(14), do: "E"
-  defp byte_to_hex(15), do: "F"
+  @spec close(db_handle()) :: :ok | {:error, any()}
+  def close(db_handle), do: :rocksdb.close(db_handle)
 end
